@@ -1,0 +1,19 @@
+---
+title: "Evaluating the Efficacy of Asthma-PASS in Increasing Symptom-Free Days"
+author: "Robert Tumasian III (rat2134)"
+date: "April 26, 2021"
+output: pdf_document
+---
+
+```{r,include=FALSE}
+#load and tidy data
+library(readxl)
+Proj_5_data <- read_excel("Proj 5 data.xlsx")
+View(Proj_5_data)
+```
+
+```{r}
+#assess missing data
+
+```
+

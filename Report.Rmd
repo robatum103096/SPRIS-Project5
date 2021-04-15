@@ -7,13 +7,89 @@ output: pdf_document
 
 ```{r,include=FALSE}
 #load and tidy data
+library(tidyverse)
 library(readxl)
-Proj_5_data <- read_excel("Proj 5 data.xlsx")
-View(Proj_5_data)
+library(table1)
+library(patchwork)
+
+data <- read_excel("Proj 5 data.xlsx")
+
+data.tidy=data%>%
+  mutate(time=plyr::revalue(factor(time),c("1"="Baseline","2"="6-months",
+                                           "3"="12-months")),
+         group=plyr::revalue(factor(group),c("0"="Control","1"="Intervention")),
+         school=plyr::revalue(factor(school),c("1"="School 1","2"="School 2",
+                                             "3"="School 3","4"="School 4")))
+  
 ```
 
 ```{r}
-#assess missing data
-
+#patient char table
+table1::table1(~SFD|group+time,data=data.tidy,overall=F)
 ```
+
+```{r,message=FALSE,warning=FALSE}
+#exploratory line plots
+data.tidy %>% 
+  ggplot(aes(x = time, y = SFD, 
+             group = ID, color = group)) + 
+#  geom_point(alpha = 0.4) + 
+  geom_path(alpha = 0.4) + 
+  facet_grid(~group) +  
+  stat_summary(aes(group = 1), fun = "mean", geom = "line", color = "black") + 
+  stat_summary(aes(group = 1), fun = "mean", geom = "point", color = "black", size = 3, shape = 4) + 
+  theme_bw() + 
+  theme(legend.position = "none")+labs(x="Time")
+```
+
+
+
+```{r}
+#lme model (time continuous)
+lme1=nlme::lme(SFD~time+group,
+                random=list(school=~1,ID=~1),
+                data=data%>%
+                 na.omit()%>%
+                 mutate(ID=factor(ID),
+                        group=plyr::revalue(factor(group),
+                                            c("0"="Control","1"="Intervention")),
+                        school=plyr::revalue(factor(school),
+                                             c("1"="School 1","2"="School 2",
+                                             "3"="School 3","4"="School 4")),
+                        time=ifelse(time==1,0,ifelse(time==2,6,12))))
+
+summary(lme1)
+
+#lme model (time categorical)
+lme2=nlme::lme(SFD~time+group,
+                random=list(school=~1,ID=~1),
+                data=data.tidy%>%na.omit())
+
+summary(lme2)
+
+#Poisson glme model (time categorical)
+lme3=lme4::glmer(SFD~time+group+(1|school:ID),
+                family="poisson",
+                data=data.tidy%>%na.omit())
+
+summary(lme3)
+
+#Poisson glme model (time continuous)
+lme4=lme4::glmer(SFD~time+group+(1|school:ID),
+                family="poisson",
+                data=data%>%
+                 na.omit()%>%
+                 mutate(ID=factor(ID),
+                        group=plyr::revalue(factor(group),
+                                            c("0"="Control","1"="Intervention")),
+                        school=plyr::revalue(factor(school),
+                                             c("1"="School 1","2"="School 2",
+                                             "3"="School 3","4"="School 4")),
+                        time=ifelse(time==1,0,ifelse(time==2,6,12))))
+
+summary(lme4)
+```
+
+
+
 

@@ -1,0 +1,134 @@
+---
+title: "P9185 Project 5"
+date: "`r Sys.Date()`"
+output: htlm_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(gtsummary)
+library(lmerTest)
+library(nlme)
+library(pwr)        # for power analysis 
+```
+
+---
+
+# Pilot Study
+
+## Study participants. 
+
+Because the intervention is developmentally appropriate for child age 4-11 years, the pilot study recruited 108 children aged 4-11 years with physician-diagnosed persistent or uncontrolled asthma attending kindergarten to 5th grades from the 4 Bronx elementary schools. The four elementary schools were randomly assigned into Asthma-PASS intervention group (2 schools) or AM comparison group (in which participants just follow the routine provided by each school, i.e., the standard of care) (2 schools). The participated children were followed at 6 and 12 months after baseline.
+
+## Goal of the study. 
+
+The investigators had primary interest on whether Children in schools receiving Asthma-PASS intervention may experience a greater improvement in the number of SFD at 6 or 12 months follow up than the children in the AM comparison group. 
+
+--- 
+
+# Question 1
+
+Did the pilot study provide any evidence for effectiveness of the intervention program (i.e. any clues to answer their questions for primary interests)? Describe and comment on the effect sizes. The primary outcome of interest is SFD (symptom free days in the past two weeks prior to each of the three time points).
+
+
+```{r load_data}
+# load data
+dat0 = readxl::read_xlsx("./Proj 5 data.xlsx")
+
+dat = dat0 %>% 
+  mutate(
+    time = factor(time, 
+                  levels = c(1,2,3),
+                  labels = c("Baseline","6-month","12-month")),
+    group = factor(group, 
+                   levels = c(0,1), 
+                   labels = c("Control", "Intervention")),
+    school = factor(school)) %>% 
+  arrange(ID,time)
+
+dat_wide = dat %>% 
+  pivot_wider(
+    names_from = time,
+    values_from = SFD)
+dat_wide$na_count = apply(dat_wide[,-1], 1, function(x) sum(is.na(x)))
+```
+
+```{r check_missing_dat}
+# check for missing 
+visdat::vis_miss(dat_wide %>% select(-ID,-group,-school,-na_count)) + theme(axis.text.x = element_text(angle = 45))
+```
+
+```{r descrpt_stt_dat}
+# Descriptive statistics
+dat_wide %>% 
+  select(-ID) %>% 
+  tbl_summary(
+    by = group,
+    missing_text = "(Missing)",
+    statistic = list(all_continuous() ~ "{mean} ({sd})"),
+    label = list(na_count ~ "Missing visits",
+                 Baseline ~ "SFD at Baseline",
+                 `6-month` ~ "SFD at 6-month",
+                 `12-month` ~ "SFD at 12-month")) %>% 
+  bold_labels() %>% 
+  italicize_levels() %>% 
+  add_p() %>% 
+  bold_p(t = 0.05) %>% 
+  add_n() 
+```
+
+```{r spaghetti_plt_dat,eval=FALSE}
+# spaghetti plot 
+dat %>% 
+  ggplot(aes(x = time, y = SFD, 
+             group = ID, color = group)) + 
+  geom_point(alpha = 0.4) + 
+  geom_path(alpha = 0.4) + 
+  facet_grid(~group) +  
+  stat_summary(aes(group = 1), fun = "mean", geom = "line", color = "black") + 
+  stat_summary(aes(group = 1), fun = "mean", geom = "point", color = "black", size = 3, shape = 4) + 
+  theme_bw() + 
+  theme(legend.position = "none")
+  
+
+# Mean SFD by group and time
+dat %>% 
+  group_by(group,time) %>% 
+  summarise(mean_SFD = mean(SFD, na.rm = T)) %>% 
+  pivot_wider(
+    values_from = mean_SFD,
+    names_from = group
+  ) %>% 
+  knitr::kable(digit = 2, caption = "Average SFD") %>% 
+  kableExtra::kable_classic(full_width = F)
+```
+
+
+
+```{r model_Q1}
+#https://www.muscardinus.be/2017/07/lme4-random-effects/ 
+
+# Only 2 follow-ups, consider time as categorical to capture non-linear trend
+# also test for potential tx by time interaction 
+
+fit1 = glmer(cbind(SFD, 14-SFD) ~ time * group + (1|school) + (1|school:ID), binomial(link = "logit"), data = dat, 
+             control = glmerControl(optimizer = "bobyqa", 
+                                    optCtrl = list(maxfun = 50000)))
+fit1.1 = glmer(cbind(SFD, 14-SFD) ~ time + group + (1|school) + (1|school:ID) + (1|school:ID:time), binomial(link = "logit"), data = dat, 
+             control = glmerControl(optimizer = "bobyqa", 
+                                    optCtrl = list(maxfun = 50000)))
+fit1.2 = glmer(cbind(SFD, 14-SFD) ~ time * group + (1|school) + (1|school:ID) + (1|time), binomial(link = "logit"), data = dat, 
+             control = glmerControl(optimizer = "bobyqa", 
+                                    optCtrl = list(maxfun = 50000)))
+
+anova(fit1,fit1.1,fit1.2) # fit1.1 has the smallest BIC, use fif1.1
+
+summary(fit1.1)
+
+# model diagnostics -- ?
+
+```
+
+

@@ -1,0 +1,270 @@
+---
+title: "P9185 Project 5"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, message = FALSE, warning = FALSE,collapse = T)
+
+library(tidyverse)
+library(gtsummary)
+library(lme4)
+library(pwr)        # for power analysis 
+```
+
+---
+
+# Question 2
+
+The investigators wish to propose a cluster-randomized clinical trial (RCT) in 30 Bronx schools (i.e., the unit of randomization is school, NOT students) to evaluate the effectiveness of their intervention program. The primary hypothesis is that compared to the control group, children in schools randomized to intervention group will experience a greater improvement in the number of SFD (symptom free days in the past two weeks) at any of the 3, 6, 9, and 12 months assessment. In other words, if children in the intervention group perform better than those in the control group at any of those four assessment time points, the intervention is considered as success. The investigators would like to have at 80% probability to declare the trial is successful if the true effect size in improvement of SFD over time is at least 1/3 standard deviation. As a study statistician, you are asked to use the above information and the result from analyzing the data of the above pilot study to conduct a power analysis for total sample size of children needed to the proposed study. (Hint: Consider intra-class-correlation (ICC) in your design.)
+
+```{r load_data}
+# load data
+dat0 = readxl::read_xlsx("./Proj 5 data.xlsx")
+
+dat = dat0 %>% 
+  mutate(
+    time = factor(time, 
+                  levels = c(1,2,3),
+                  labels = c("Baseline","6-month","12-month")),
+    group = factor(group, 
+                   levels = c(0,1), 
+                   labels = c("Control", "Intervention")),
+    school = factor(school)) %>% 
+  arrange(ID,time)
+
+dat_wide = dat %>% 
+  pivot_wider(
+    names_from = time,
+    values_from = SFD)
+dat_wide$na_count = apply(dat_wide[,-1], 1, function(x) sum(is.na(x)))
+```
+
+
+## Idea 
+
+* Treat SFD as continuous variable for the sample size calculation in Q2
+* Use estimates of variance from Q1
+
+> "To our knowledge, there is no sample size formula for count data in three-level CRTs"
+> 
+> `r tufte::quote_footer('--- https://onlinelibrary-wiley-com.ezproxy.cul.columbia.edu/doi/full/10.1002/sim.8670')`
+
+* Final model: (Binomial model) time * group + (1|school) + (1|school:ID)
+
+--- 
+
+
+## 3-level cluster randomized trial
+
+* 3 levels: school ($n_c = 15$) - students ($n_s$) - repeated measures ($n_e = 5$)
+  * $n_c:$ the number of cluster (school in our case) per arm group
+  * $n_s:$ the number of subjects per cluster
+  * $n_e:$ the number of evaluations per subjects
+* 3 variance components: 
+  * between schools ($\sigma_{c}^2$), 
+  * between students within schools ($\sigma_s^2$), 
+  * between repeated measures within students ($\sigma_e^2$)
+
+### Sample size calculation: Idea
+
+* The sample size needed to detect a treatment effect $\delta$ with power $1-\beta$ and two-sided confidence level $\alpha$ can be obtained using the following formula: 
+$\frac{2(z_{\alpha/2} + z_\beta)2}{(es)^2} = \frac{\sigma^2}{\text{(variance of treatment mean)}}$
+  * $\sigma^2$ is the variance of a single outcome
+  * $es$ is the effect size, which is $\delta/\sigma$
+  * $z_{q}$ is the 100 q-th percentile of the standard normal distribution. 
+* Under 3-level cluster randomization, 
+$\text{variance of treatment mean} = \frac{\sigma^2}{n_c n_s n_e} \cdot [1 + (n_s - 1) \rho_s(n_e)] \cdot [1 + (n_e-1) \rho_e]$
+  * $\sigma^2 = \sigma_{c}^2 + \sigma_{s}^2 + \sigma_{e}^2$
+  * $\rho_e$ is the correlation between repeated measures within subjects, which can be estimated as $\frac{\sigma_{c}^2 + \sigma_{s}^2}{\sigma_{c}^2 + \sigma_{s}^2 + \sigma_{e}^2}$
+  * $\rho_s(n_e)$ is the correlation of subjects means scores within clusters, which can be estimated as $\rho_s \cdot w$, where $w = \frac{n_e \rho_e}{1 + (n_e-1) \rho_e}$, $\rho_s = \frac{\sigma_{c}^2}{\sigma_{c}^2 + \sigma_{s}^2}$ is the correlation between subjects within schools, without the sampling error due to variation at evaluation level
+* 1. 	Teerenstra S, Moerbeek M, van Achterberg T, Pelzer BJ, Borm GF. Sample size calculations for 3-level cluster randomized trials. Clin Trials Lond Engl 2008;5(5):486–95.
+
+
+### Sample size calculation
+
+* $n_s = N_0 \frac{1+(n_e-1)\rho_e - n_e \rho_e\rho_s}{n_c n_e - n_e \rho_e \rho_s N_0}$
+  * $N_0 = 2(z_{\alpha/2} + z_\beta)2/(es)^2$ is the total number of evaluations (per treatment group) required to obtain a power $1-\beta$ at a two-sided confidence $\alpha$ in the absence of correlation. 
+  * Here, effect size $es = 1/3$
+  * Used mixed effects logistic regression to get variance estimates
+    * fixed effects: time, group
+    * random effects: school (nested within group), subject (nested within school)
+    * Estimated variance component and correlation see below
+* required cluster size is 8
+
+```{r initial_n}
+# initial n
+n0 = 
+  power.t.test(power = 0.8, delta = 1, sd = 3, 
+               type = "two.sample", sig.level = 0.05) %>% 
+  broom::tidy() %>% pull(n) %>% ceiling()
+
+n_c = 15
+n_e = 5
+
+# rho estimation (from pilot study)
+## binomial model
+fit = glmer(cbind(SFD, 14-SFD) ~ time * group + (1|school) + (1|school:ID), binomial(link = "logit"), data = dat, 
+             control = glmerControl(optimizer = "bobyqa", 
+                                    optCtrl = list(maxfun = 50000)))
+anova(fit)
+(sum.fit = summary(fit))
+
+
+vc = VarCorr(fit)
+
+school_variance = as.data.frame(vc)$vcov[2]
+subject_variance = as.data.frame(vc)$vcov[1]
+time_variance = (sum.fit$sigma)^2
+total_variance = school_variance + subject_variance + time_variance
+
+#iic2 = school_variance/total_variance
+#iic1 = subject_variance/total_variance
+#iic2/(iic1 + iic2)
+#iic1 + iic2
+#
+#iic_clus = school_variance/total_variance
+#iic_subj = (school_variance + subject_variance)/total_variance
+#iic_clus/iic_subj
+#iic_subj
+
+rho_s = school_variance/(school_variance + subject_variance)
+rho_e = (school_variance + subject_variance)/total_variance
+
+# display variance component
+data.frame(
+  "Variation source" = c("Between repeated measures within subjects ($\\sigma_e^2$)",
+                         "Between subjects within schools ($\\sigma_s^2$)",
+                         "Between schools($\\sigma_c^2$)"),
+  Variance = c(time_variance,subject_variance,school_variance)) %>%
+  knitr::kable(digit = 3, caption = "Variation Estimates") %>%
+  kableExtra::kable_classic(full_width = F)
+
+# display rho
+data.frame(
+  "Correlation" = c("Between repeated measure within subjects ($\\rho_e$)",
+                    "Between subjects within schools ($\\rho_s$)"),
+  "Estimate" = c(rho_e,rho_s)) %>%
+  knitr::kable(digit = 3, caption = "Correlation Estimates") %>%
+  kableExtra::kable_classic(full_width = F)
+
+
+# w 
+w = (n_e * rho_e)/(1 + (n_e - 1) * rho_e)
+
+# n_s
+n_s = (n0 * (1 + (n_e - 1) * rho_e - n_e * rho_e * rho_s)/(n_c * n_e - n_e * rho_e * rho_s * n0)) %>% ceiling()
+n_s
+```
+
+
+
+## Cluster size
+
+* Need to account for variable cluster size when cluster size variability is large
+  * i.e. when the coefficient of variation of cluster size ( cv = the standard deviation of cluster size / mean cluster size) > 0.23 $^2$
+* In our case: cv = 0.16 < 0.23, so no need to account for variable cluster size
+* 2. 	Eldridge SM, Ashby D, Kerry S. Sample size for cluster randomized trials: effect of coefficient of variation of cluster size and analysis method. Int J Epidemiol 2006;35(5):1292–300.
+
+```{r cluster_size}
+# compute cluster size 
+group_size = 
+  dat_wide %>% 
+  group_by(school,group) %>% 
+  summarise(total_n = n()) %>% ungroup()
+
+# compute cv of cluster size
+mean_cluster_size = group_size %>% pull(total_n) %>% mean()
+sd_cluster_size = group_size %>% pull(total_n) %>% sd()
+cv_cluster_size = sd_cluster_size/mean_cluster_size
+cv_cluster_size
+
+# display cluster size 
+colnames(group_size) = c("School","Group","Group Size")
+group_size %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_classic(full_width = F) %>% 
+  kableExtra::footnote(general = "Coefficient of variation of cluster size = 0.16")
+```
+
+
+## Attrition 
+
+* Conventional method to account for attrition is to divide the sample size by the anticipated retention rate
+* Retention rate (from pilot study)
+* In our case, to be conservative, we will use the lowest average retention rate across schools 0.87 for the sample size calculation. 
+* required cluster size recomes 10, after accounting for 13% attrition rate per cluster 
+
+```{r retention_rate_by_school_time}
+# compute retention rate by school and time
+retention_rate_school = 
+  dat %>% 
+  group_by(school,time) %>% 
+  summarise(missing_n = sum(is.na(SFD)),
+            total_n = n()) %>% ungroup() %>% 
+  mutate(retention = 1 - missing_n/total_n)
+
+# add column mean, row mean, grand mean
+retention_rate_school1 = 
+  retention_rate_school %>% 
+  select(-missing_n,-total_n) %>% 
+  pivot_wider(
+    values_from = retention,
+    names_from = school) 
+
+col_mean = colMeans(retention_rate_school1[2:5] %>% as.matrix(), dims = 1) %>% as.numeric()
+row_mean = rowMeans(retention_rate_school1[-1] %>% as.matrix(), dims = 1)
+grand_mean = mean(retention_rate_school$retention)
+
+retention_rate_school1$Average = row_mean
+retention_rate_school1$time = as.character(retention_rate_school1$time)
+retention_rate_school1 =
+  rbind(retention_rate_school1,c("Average",col_mean,grand_mean))
+
+# display retention rate
+retention_rate_school1 %>% 
+  mutate_at(2:6, as.numeric) %>% 
+  rename("Time" = time) %>% 
+  knitr::kable(digit = 2, caption = "Retention Rate By School and Time") %>%
+  kableExtra::kable_classic(full_width = F)
+```
+
+```{r adj_n}
+# cluster size adjusted for attrition
+n_s_1 = (n_s/0.87) %>% ceiling()
+n_s_1
+```
+
+
+```{r power}
+# power
+es = 1/3
+test.stt = qnorm(0.975) + es/sqrt(2)*sqrt(n_c)/(sqrt(rho_s*w + (1 - rho_s*w)/n_s_1) * (rho_e + (1 - rho_e)/n_e))
+test.stt
+pnorm(test.stt)
+```
+
+
+## Discussion 
+
+* Pilot study: 108 subjects from 4 schools (average cluster size 27)
+* Now: 10 subjects per school from 30 schools
+* This is reasonable because, in practice, with ICC between 0.01-0.05, 8-12 clusters will often be needed in each study group. Since large cluster number is more effective in increasing power than large cluster size, therefore with 30 clusters we may not need a large cluster size. 
+
+> "ICCs in public health and medicine often fall in the range of 0.01–0.05, and if the ICC does fall in that range, 8–12 groups or clusters will often be needed in each study condition. The best advice is to estimate sample size requirements for the trial under consideration, using the best parameter estimates available."
+>
+> `r tufte::quote_footer('--- What is the minimum number of groups per condition in a GRT? https://researchmethodsresources.nih.gov/methods/grt')`
+
+> "Investigators should estimate sample size requirements for the trial under consideration, using the best parameter estimates available. At the same time, it is fair to say that increasing the number of groups or clusters per condition will more effectively increase power than will increasing the number of members per group or cluster."
+>
+> `r tufte::quote_footer('--- What is the minimum number of members per group in a GRT? https://researchmethodsresources.nih.gov/methods/grt')`
+
+
+
+
+
